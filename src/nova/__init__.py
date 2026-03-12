@@ -1,13 +1,10 @@
 """
 Nova Skill - 轻量级 Skill + Tool 框架
-
-使用 LangChain / LangGraph 框架能力
-支持跨平台（Windows / Linux / macOS）
 """
 
 __version__ = "0.1.0"
 
-from nova.skill import Skill, SkillRegistry
-from nova.agent import Agent
+# 只导出基础模块，避免循环导入
+from nova.skill import Skill, SkillRegistry, get_registry
 
-__all__ = ["Skill", "SkillRegistry", "Agent"]
+__all__ = ["Skill", "SkillRegistry", "get_registry"]

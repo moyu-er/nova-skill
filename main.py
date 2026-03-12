@@ -1,163 +1,210 @@
 #!/usr/bin/env python3
 """
-Nova Skill - 启动脚本
+Nova Skill - FastAPI 后端
 
-跨平台启动（Windows / Linux / macOS）
+特性：
+- 支持 OpenAI / Anthropic / 其他模型
+- 纯后端流式输出（SSE）
+- 跨平台兼容
+- 使用 LangChain @tool 装饰器（框架能力）
 """
 import os
 import sys
 from pathlib import Path
-
-# 添加 src 到路径
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
+
+# 配置日志
+logger.remove()
+logger.add(sys.stderr, level="INFO", format="{time:HH:MM:SS} | {level} | {message}")
+logger.add("logs/nova.log", rotation="10 MB", retention="7 days")
 
 # 加载环境变量
 load_dotenv()
 
-from langchain_openai import ChatOpenAI
+# 添加 src 到路径
+sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from nova.skill import SkillRegistry
 from nova.agent import Agent, AgentConfig
 
 
-def create_sandbox_tool():
-    """创建沙箱执行工具（跨平台）"""
-    import platform
-    import subprocess
-    import tempfile
+# 全局变量
+agent = None
+skill_registry = None
+
+
+def get_model_config() -> tuple:
+    """
+    获取模型配置
     
-    system = platform.system()
+    支持 OPENAI_ 和 ANTHROPIC_ 前缀的环境变量
+    """
+    # 检查模型类型
+    model = os.getenv("MODEL", "gpt-4o-mini")
     
-    def execute_python(code: str) -> str:
-        """执行 Python 代码"""
-        # 创建临时文件
-        with tempfile.NamedTemporaryFile(
-            mode='w', 
-            suffix='.py', 
-            delete=False,
-            encoding='utf-8'
-        ) as f:
-            f.write(code)
-            temp_file = f.name
+    if "claude" in model.lower():
+        # Anthropic 配置
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        base_url = os.getenv("ANTHROPIC_BASE_URL")  # 可选，用于第三方兼容
         
-        try:
-            # 执行代码
-            result = subprocess.run(
-                [sys.executable, temp_file],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            output = result.stdout
-            if result.stderr:
-                output += f"\n[Error] {result.stderr}"
-            
-            return output
-        except subprocess.TimeoutExpired:
-            return "Execution timeout (30s)"
-        except Exception as e:
-            return f"Execution error: {e}"
-        finally:
-            # 清理临时文件
-            try:
-                os.unlink(temp_file)
-            except:
-                pass
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY not set")
+        
+        logger.info(f"Using Anthropic model: {model}")
+        return model, api_key, base_url
     
-    return execute_python
+    else:
+        # OpenAI 或其他兼容模型
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL")  # 可选，用于第三方兼容
+        
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY not set")
+        
+        logger.info(f"Using OpenAI-compatible model: {model}")
+        return model, api_key, base_url
 
 
-def main():
-    """主函数"""
-    print("=" * 60)
-    print("Nova Skill - 轻量级 AI 助手")
-    print("=" * 60)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    global agent, skill_registry
     
-    # 检查 API Key
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("\n❌ Error: OPENAI_API_KEY not set")
-        print("Please set your OpenAI API key in .env file")
-        return 1
+    logger.info("🚀 Starting Nova Skill...")
     
-    # 初始化 LLM
-    print("\n[1/3] Initializing LLM...")
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0.7,
-        api_key=api_key
-    )
+    # 获取模型配置
+    model, api_key, base_url = get_model_config()
     
-    # 加载 Skills（从 Markdown 文件）
-    print("\n[2/3] Loading skills from Markdown...")
-    registry = SkillRegistry()
+    # 跨平台路径处理
     skills_dir = Path(__file__).parent / "skills"
-    registry.load_from_directory(skills_dir)
+    logger.info(f"Skills directory: {skills_dir}")
     
-    # 绑定工具到 skill
-    coder_skill = registry.get("coder")
-    if coder_skill:
-        from nova.skill import Tool
-        sandbox_tool = Tool(
-            name="execute_python",
-            description="在沙箱中执行 Python 代码",
-            func=create_sandbox_tool()
-        )
-        coder_skill.tools.append(sandbox_tool)
-        print(f"   Bound sandbox tool to coder skill")
+    # 加载 Skills
+    logger.info("Loading skills...")
+    skill_registry = SkillRegistry(skills_dir)
     
     # 创建 Agent
-    print("\n[3/3] Creating agent with skills...")
+    logger.info("Creating agent...")
     config = AgentConfig(
         name="nova",
-        model="gpt-4o-mini",
-        skills=None  # 加载所有 skills
+        model=model,
+        skills=["coder"] if skill_registry.get("coder") else []
     )
     
-    agent = Agent(config, llm, registry)
+    agent = Agent(
+        config=config,
+        skill_registry=skill_registry,
+        api_key=api_key,
+        base_url=base_url
+    )
     
-    # 打印 system prompt 预览
-    print(f"\n{'='*60}")
-    print("System Prompt Preview:")
-    print(f"{'='*60}")
-    preview = agent.get_system_prompt()[:500]
-    print(preview + "..." if len(agent.get_system_prompt()) > 500 else preview)
-    print(f"\n{'='*60}")
+    logger.info("✅ Nova Skill ready!")
+    yield
     
-    print("\nReady! Type 'exit' to quit")
-    print("=" * 60 + "\n")
+    logger.info("👋 Shutting down...")
+
+
+# 创建 FastAPI 应用
+app = FastAPI(
+    title="Nova Skill API",
+    description="支持 OpenAI / Anthropic 的 Skill + Tool 框架",
+    version="0.1.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health")
+async def health():
+    """健康检查"""
+    return {
+        "status": "healthy",
+        "agent": agent is not None,
+        "model": agent.config.model if agent else None
+    }
+
+
+@app.get("/model")
+async def get_model_info():
+    """获取当前模型信息"""
+    if not agent:
+        return {"error": "Agent not initialized"}
     
-    # 交互式对话
-    import asyncio
+    return {
+        "model": agent.config.model,
+        "provider": "anthropic" if agent.config.is_anthropic else "openai",
+        "skills_loaded": [s.name for s in agent._skills_loaded]
+    }
+
+
+@app.get("/skills")
+async def list_skills():
+    """列出所有 skills"""
+    if not skill_registry:
+        return {"skills": []}
     
-    async def chat_loop():
-        thread_id = "main"
-        while True:
-            try:
-                user_input = input("You: ").strip()
-                if not user_input:
-                    continue
-                if user_input.lower() == 'exit':
-                    break
-                
-                print("\nNova: ", end="", flush=True)
-                response = await agent.arun(user_input, thread_id)
-                print(response)
-                print()
-                
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                print(f"\nError: {e}")
+    skills = []
+    for s in skill_registry.list_all():
+        skills.append({
+            "name": s.name,
+            "description": s.description[:100] if s.description else "",
+            "capabilities": s.capabilities
+        })
     
-    asyncio.run(chat_loop())
+    return {"skills": skills}
+
+
+@app.post("/chat")
+async def chat(message: str):
+    """
+    流式对话
     
-    print("\nGoodbye!")
-    return 0
+    返回 SSE 格式流
+    """
+    if not agent:
+        return StreamingResponse(
+            iter(["data: Agent not initialized\n\n"]),
+            media_type="text/event-stream"
+        )
+    
+    async def event_generator():
+        try:
+            async for chunk in agent.astream(message):
+                yield f"data: {chunk}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            logger.error(f"Stream error: {e}")
+            yield f"data: Error: {e}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream"
+    )
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import uvicorn
+    
+    # 确保日志目录存在
+    Path("logs").mkdir(exist_ok=True)
+    
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info"
+    )
