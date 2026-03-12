@@ -214,7 +214,7 @@ async def run_cli():
                     
                     elif event_type == "tool_result":
                         content = event.get("content", "")
-                        preview = content[:200] + "\n..." if len(content) > 150 else content
+                        preview = content[:200] + " ..." if len(content) > 150 else content
                         print(f"{Colors.GREEN}[Result: {preview}]{Colors.ENDC}\n")
                     
                     elif event_type == "error":

@@ -44,11 +44,36 @@ def get_model_config() -> tuple:
     获取模型配置
     
     支持 OPENAI_ 和 ANTHROPIC_ 前缀的环境变量
+    通过 DEFAULT_MODEL_TYPE 可以强制指定模型类型
     """
-    # 检查模型类型
+    # 获取模型类型配置 (openai | anthropic | auto)
+    model_type = os.getenv("DEFAULT_MODEL_TYPE", "auto").lower().strip()
+    
+    # 获取温度参数
+    try:
+        temperature = float(os.getenv("TEMPERATURE", "0.7"))
+    except ValueError:
+        logger.warning("Invalid TEMPERATURE value, using default 0.7")
+        temperature = 0.7
+    
+    # 获取模型名称
     model = os.getenv("MODEL", "gpt-4o-mini")
     
-    if "claude" in model.lower():
+    # 根据模型类型或模型名称确定 provider
+    is_anthropic = False
+    if model_type == "anthropic":
+        is_anthropic = True
+        logger.info(f"Using forced Anthropic model type: {model}")
+    elif model_type == "openai":
+        is_anthropic = False
+        logger.info(f"Using forced OpenAI model type: {model}")
+    else:
+        # auto mode: detect from model name
+        is_anthropic = "claude" in model.lower()
+        provider = "Anthropic" if is_anthropic else "OpenAI-compatible"
+        logger.info(f"Auto-detected {provider} model: {model}")
+    
+    if is_anthropic:
         # Anthropic 配置
         api_key = os.getenv("ANTHROPIC_API_KEY")
         base_url = os.getenv("ANTHROPIC_BASE_URL")  # 可选，用于第三方兼容
@@ -56,19 +81,17 @@ def get_model_config() -> tuple:
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY not set")
         
-        logger.info(f"Using Anthropic model: {model}")
-        return model, api_key, base_url
+        return model, api_key, base_url, temperature, "anthropic"
     
     else:
-        # OpenAI 或其他兼容模型
+        # OpenAI 或其他兼容模型 (默认)
         api_key = os.getenv("OPENAI_API_KEY")
         base_url = os.getenv("OPENAI_BASE_URL")  # 可选，用于第三方兼容
         
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set")
         
-        logger.info(f"Using OpenAI-compatible model: {model}")
-        return model, api_key, base_url
+        return model, api_key, base_url, temperature, "openai"
 
 
 @asynccontextmanager
@@ -79,7 +102,7 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting Nova Skill...")
     
     # 获取模型配置
-    model, api_key, base_url = get_model_config()
+    model, api_key, base_url, temperature, model_type = get_model_config()
     
     # 跨平台路径处理
     skills_dir = Path(__file__).parent / "skills"
@@ -94,6 +117,8 @@ async def lifespan(app: FastAPI):
     config = AgentConfig(
         name="nova",
         model=model,
+        temperature=temperature,
+        model_type=model_type,
         skills=["coder"] if skill_registry.get("coder") else []
     )
     
@@ -146,6 +171,8 @@ async def get_model_info():
     return {
         "model": agent.config.model,
         "provider": "anthropic" if agent.config.is_anthropic else "openai",
+        "model_type": agent.config.model_type,
+        "temperature": agent.config.temperature,
         "skills_loaded": [s.name for s in agent._skills_loaded]
     }
 
@@ -197,14 +224,4 @@ async def chat(message: str):
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # 确保日志目录存在
-    Path("logs").mkdir(exist_ok=True)
-    
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)

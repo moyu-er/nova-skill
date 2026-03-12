@@ -4,14 +4,14 @@ Agent module - Supports OpenAI / Anthropic / other models
 Uses LangChain universal interface, auto-detects model type
 """
 import logging
+import os
 from typing import List, Optional, AsyncGenerator, Dict, Any, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from langchain_core.language_models import BaseChatModel
 
 logger = logging.getLogger(__name__)
-from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode
@@ -27,16 +27,37 @@ class AgentConfig:
     model: str = "gpt-4o-mini"  # or "claude-3-5-sonnet-20241022"
     temperature: float = 0.7
     skills: List[str] = None
+    # Model type: "openai" | "anthropic" | "auto"
+    # auto: auto-detect based on model name
+    # openai: force use OpenAI format (default when no config or config error)
+    # anthropic: force use Anthropic format
+    model_type: str = "auto"
+    
+    def __post_init__(self):
+        if self.skills is None:
+            self.skills = []
+        # Normalize model_type
+        self.model_type = self.model_type.lower().strip()
     
     @property
     def is_anthropic(self) -> bool:
         """Check if it's an Anthropic model"""
+        if self.model_type == "anthropic":
+            return True
+        if self.model_type == "openai":
+            return False
+        # auto mode: detect from model name
         return "claude" in self.model.lower()
     
     @property
     def is_openai(self) -> bool:
         """Check if it's an OpenAI model"""
-        return any(x in self.model.lower() for x in ["gpt", "o1", "o3"])
+        if self.model_type == "openai":
+            return True
+        if self.model_type == "anthropic":
+            return False
+        # auto mode: not claude means openai-compatible
+        return "claude" not in self.model.lower()
 
 
 class ModelFactory:
@@ -48,44 +69,53 @@ class ModelFactory:
         Create LLM instance
         
         Auto-detects model type, uses corresponding LangChain implementation
+        Defaults to OpenAI format when no config or config error
         """
         if config.is_anthropic:
             from langchain_anthropic import ChatAnthropic
             
             logger.info(f"Creating Anthropic model: {config.model}")
-            return ChatAnthropic(
-                model=config.model,
-                temperature=config.temperature,
-                anthropic_api_key=api_key,
-                anthropic_api_url=base_url,
-                streaming=True,
-                max_tokens=4096,
-            )
-        
-        elif config.is_openai:
-            from langchain_openai import ChatOpenAI
             
-            logger.info(f"Creating OpenAI model: {config.model}")
-            return ChatOpenAI(
-                model=config.model,
-                temperature=config.temperature,
-                api_key=api_key,
-                base_url=base_url,
-                streaming=True,
-            )
+            # Build kwargs for Anthropic
+            kwargs = {
+                "model": config.model,
+                "temperature": config.temperature,
+                "streaming": True,
+                "max_tokens": 4096,
+            }
+            
+            # Only add api_key if provided
+            if api_key:
+                kwargs["api_key"] = api_key
+            
+            # Only add base_url if provided (for custom endpoints)
+            if base_url:
+                kwargs["base_url"] = base_url
+            
+            return ChatAnthropic(**kwargs)
         
         else:
-            # Other models (via OpenAI compatible interface)
+            # OpenAI or other compatible models (default)
             from langchain_openai import ChatOpenAI
             
             logger.info(f"Creating OpenAI-compatible model: {config.model}")
-            return ChatOpenAI(
-                model=config.model,
-                temperature=config.temperature,
-                api_key=api_key,
-                base_url=base_url,
-                streaming=True,
-            )
+            
+            # Build kwargs for OpenAI
+            kwargs = {
+                "model": config.model,
+                "temperature": config.temperature,
+                "streaming": True,
+            }
+            
+            # Only add api_key if provided
+            if api_key:
+                kwargs["api_key"] = api_key
+            
+            # Only add base_url if provided
+            if base_url:
+                kwargs["base_url"] = base_url
+            
+            return ChatOpenAI(**kwargs)
 
 
 class Agent:
