@@ -5,26 +5,25 @@ description = "轻量级 Skill + Tool 框架"
 requires-python = ">=3.10"
 
 dependencies = [
-    # LangChain 生态 - 最新稳定版
+    # LangChain ecosystem - latest stable
     "langchain>=0.3.0",
     "langchain-core>=0.3.15",
     "langchain-openai>=0.2.0",
     "langchain-anthropic>=0.3.0",
     "langgraph>=0.2.50",
-    
     # FastAPI
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-    
-    # 工具
+    "pydantic>=2.0.0",
+    # Tools
     "httpx>=0.27.0",
     "pyyaml>=6.0.2",
-    
-    # 日志
+    # Logging
     "loguru>=0.7.2",
-    
-    # 环境变量
+    # Environment variables
     "python-dotenv>=1.0.0",
+    "ddgs>=8.1.1",
+    "tzdata>=2025.3",
 ]
 
 [project.optional-dependencies]
@@ -37,9 +36,18 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/nova"]
+
 [tool.uv]
 python-preference = "only-system"
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+]

@@ -1,7 +1,7 @@
 """
-Agent 模块 - 支持 OpenAI / Anthropic / 其他模型
+Agent module - Supports OpenAI / Anthropic / other models
 
-使用 LangChain 通用接口，自动识别模型类型
+Uses LangChain universal interface, auto-detects model type
 """
 import logging
 from typing import List, Optional, AsyncGenerator, Dict, Any, Union
@@ -22,32 +22,32 @@ from nova.tools import get_all_tools
 
 @dataclass
 class AgentConfig:
-    """Agent 配置"""
+    """Agent configuration"""
     name: str = "nova"
-    model: str = "gpt-4o-mini"  # 或 "claude-3-5-sonnet-20241022"
+    model: str = "gpt-4o-mini"  # or "claude-3-5-sonnet-20241022"
     temperature: float = 0.7
     skills: List[str] = None
     
     @property
     def is_anthropic(self) -> bool:
-        """判断是否为 Anthropic 模型"""
+        """Check if it's an Anthropic model"""
         return "claude" in self.model.lower()
     
     @property
     def is_openai(self) -> bool:
-        """判断是否为 OpenAI 模型"""
+        """Check if it's an OpenAI model"""
         return any(x in self.model.lower() for x in ["gpt", "o1", "o3"])
 
 
 class ModelFactory:
-    """模型工厂 - 自动创建对应模型的 LLM"""
+    """Model factory - automatically creates LLM for corresponding model"""
     
     @staticmethod
     def create(config: AgentConfig, api_key: str = None, base_url: str = None) -> BaseChatModel:
         """
-        创建 LLM 实例
+        Create LLM instance
         
-        自动识别模型类型，使用对应的 LangChain 实现
+        Auto-detects model type, uses corresponding LangChain implementation
         """
         if config.is_anthropic:
             from langchain_anthropic import ChatAnthropic
@@ -75,7 +75,7 @@ class ModelFactory:
             )
         
         else:
-            # 其他模型（通过 OpenAI 兼容接口）
+            # Other models (via OpenAI compatible interface)
             from langchain_openai import ChatOpenAI
             
             logger.info(f"Creating OpenAI-compatible model: {config.model}")
@@ -90,37 +90,35 @@ class ModelFactory:
 
 class Agent:
     """
-    Nova Agent - 基于 LangGraph
+    Nova Agent - Based on LangGraph
     
-    支持 OpenAI、Anthropic、其他兼容模型
+    Supports OpenAI, Anthropic, other compatible models
     """
     
     def __init__(
         self,
         config: AgentConfig,
-        llm: BaseChatModel = None,
         skill_registry: SkillRegistry = None,
         api_key: str = None,
-        base_url: str = None
+        base_url: str = None,
     ):
         self.config = config
         self.skill_registry = skill_registry or SkillRegistry()
-        self._skills_loaded = []
-        self._system_prompt: str = ""
-        self._graph = None
+        self._skills_loaded: List[Any] = []
         
-        # 创建或接收 LLM
-        if llm is None:
-            self.llm = ModelFactory.create(config, api_key, base_url)
-        else:
-            self.llm = llm
+        # Create LLM
+        self.llm = ModelFactory.create(config, api_key, base_url)
         
+        # Build system prompt
         self._load_skills()
         self._build_system_prompt()
+        
+        # Build graph
+        self._graph = None
         self._build_graph()
     
     def _load_skills(self) -> None:
-        """加载配置的 skills"""
+        """Load configured skills"""
         if not self.config.skills:
             return
         
@@ -133,29 +131,43 @@ class Agent:
                 logger.warning(f"Skill not found: {skill_name}")
     
     def _build_system_prompt(self) -> None:
-        """构建 system_prompt"""
-        parts = [f"你是 {self.config.name}，一个AI助手。"]
+        """Build system_prompt"""
+        import platform
         
-        # 告诉模型可以使用工具
-        parts.append("\n你可以使用以下工具：")
-        parts.append("- search_web: 搜索网络信息")
-        parts.append("- fetch_url: 获取网页内容")
-        parts.append("- read_file: 读取本地文件")
-        parts.append("- write_file: 写入本地文件")
-        parts.append("- list_directory: 列出目录内容")
-        parts.append("- get_available_skills: 获取可用 skills")
-        parts.append("- read_skill_detail: 读取 skill 详细内容")
+        parts = [f"You are {self.config.name}, an AI assistant."]
         
-        # 合并 skill system_prompts
-        for skill in self._skills_loaded:
-            if skill.system_prompt:
-                parts.append(f"\n=== {skill.name} ===\n{skill.system_prompt}")
+        # Add OS information
+        parts.append(f"\nCurrent Operating System: {platform.system()}")
+        parts.append(f"Path Separator: {'\\\\' if platform.system() == 'Windows' else '/'}")
+        parts.append("Use appropriate path formats for the current OS.")
+        
+        # Tell model what tools are available
+        parts.append("\nYou can use the following tools:")
+        parts.append("- get_system_info: Get current OS and environment information")
+        parts.append("- search_web: Search for information on the web")
+        parts.append("- fetch_url: Fetch content from a URL")
+        parts.append("- read_file: Read a local file (supports ~ for home directory)")
+        parts.append("- write_file: Write to a local file (creates directories if needed)")
+        parts.append("- list_directory: List directory contents with sizes and timestamps")
+        parts.append("- execute_command: Execute shell commands (use with caution)")
+        parts.append("- get_current_time: Get current date and time for a specific timezone")
+        parts.append("- list_timezones: List available timezones")
+        parts.append("- get_available_skills: Get list of available skills")
+        parts.append("- read_skill_detail: Read detailed content of a specific skill")
+        
+        # Tell model what skills are available (only names and descriptions, not full content)
+        if self._skills_loaded:
+            parts.append("\nYou can use the following skills (load details on demand):")
+            for skill in self._skills_loaded:
+                desc = f" - {skill.description}" if skill.description else ""
+                parts.append(f"- {skill.name}{desc}")
+            parts.append("\nWhen you need to use a skill, call read_skill_detail to get detailed instructions.")
         
         self._system_prompt = "\n".join(parts)
         logger.info(f"System prompt: {len(self._system_prompt)} chars")
     
     def _build_graph(self) -> None:
-        """构建 LangGraph"""
+        """Build LangGraph"""
         from typing import TypedDict, Annotated
         from langgraph.graph.message import add_messages
         
@@ -164,12 +176,12 @@ class Agent:
         
         workflow = StateGraph(State)
         
-        # 获取所有工具（框架自动收集）
+        # Get all tools (framework auto-collects)
         tools = get_all_tools(self.skill_registry)
         tool_node = ToolNode(tools)
         
         def agent_node(state: State):
-            """Agent 节点"""
+            """Agent node"""
             from langchain_core.messages import SystemMessage
             
             messages = [SystemMessage(content=self._system_prompt)] + state["messages"]
@@ -177,7 +189,7 @@ class Agent:
             return {"messages": [response]}
         
         def should_continue(state: State):
-            """判断是否继续"""
+            """Determine whether to continue"""
             last = state["messages"][-1]
             if hasattr(last, 'tool_calls') and last.tool_calls:
                 return "tools"
@@ -196,30 +208,81 @@ class Agent:
         logger.info("Graph compiled")
     
     async def astream(self, message: str, thread_id: str = None) -> AsyncGenerator[str, None]:
-        """流式执行"""
+        """Stream execution - only returns content"""
         if not self._graph:
             logger.error("Graph not built")
+            yield "Error: Graph not initialized"
             return
-        
-        config = {"configurable": {"thread_id": thread_id or "default"}}
-        
-        logger.info(f"Streaming for thread: {thread_id}")
         
         from langchain_core.messages import HumanMessage
         
+        config = {"configurable": {"thread_id": thread_id or "default"}}
+        
         async for event in self._graph.astream(
             {"messages": [HumanMessage(content=message)]},
-            config
+            config,
+            stream_mode="values"
         ):
-            if "messages" in event:
-                msg = event["messages"][-1]
-                if isinstance(msg, type(event["messages"][0])) and hasattr(msg, 'content'):
-                    if msg.content:
-                        yield msg.content
+            # Get the last message
+            messages = event.get("messages", [])
+            if messages:
+                last = messages[-1]
+                # Only return AI messages with content
+                if hasattr(last, 'content') and last.content:
+                    if last.type == 'ai':
+                        yield last.content
     
-    async def arun(self, message: str, thread_id: str = None) -> str:
-        """非流式执行"""
-        result = []
-        async for chunk in self.astream(message, thread_id):
-            result.append(chunk)
-        return "".join(result)
+    async def astream_react(self, message: str, thread_id: str = None) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream execution with ReAct process"""
+        if not self._graph:
+            logger.error("Graph not built")
+            yield {"type": "error", "content": "Graph not initialized"}
+            return
+        
+        from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+        
+        config = {"configurable": {"thread_id": thread_id or "default"}}
+        
+        seen_tool_calls = set()
+        
+        async for event in self._graph.astream(
+            {"messages": [HumanMessage(content=message)]},
+            config,
+            stream_mode="values"
+        ):
+            messages = event.get("messages", [])
+            if not messages:
+                continue
+            
+            last = messages[-1]
+            
+            # Tool call detected
+            if hasattr(last, 'tool_calls') and last.tool_calls:
+                for tc in last.tool_calls:
+                    tc_id = tc.get('id', '')
+                    if tc_id not in seen_tool_calls:
+                        seen_tool_calls.add(tc_id)
+                        yield {
+                            "type": "tool_call",
+                            "name": tc.get('name', ''),
+                            "args": tc.get('args', {})
+                        }
+            
+            # Tool result
+            elif isinstance(last, ToolMessage):
+                yield {
+                    "type": "tool_result",
+                    "name": last.name,
+                    "content": last.content[:500] if len(last.content) > 500 else last.content
+                }
+            
+            # AI response
+            elif isinstance(last, AIMessage) and last.content:
+                yield {
+                    "type": "content",
+                    "content": last.content
+                }
+    
+    def get_system_prompt(self) -> str:
+        """Get current system prompt"""
+        return self._system_prompt
