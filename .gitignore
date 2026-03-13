@@ -38,6 +38,10 @@ ENV/
 .env
 .env.local
 .env.*.local
+.*
+!.gitignore
+!.github
+!.env.example
 
 # Logs
 logs/

@@ -1,110 +1,99 @@
 # Nova Skill
 
-轻量级 Skill + Tool 框架，支持 OpenAI / Anthropic 模型，提供交互式 CLI 和 FastAPI 后端两种使用方式。
+轻量级 AI Agent 框架，支持 OpenAI / Anthropic 模型，提供交互式 CLI 和任务规划能力。
 
 ## 项目结构
 
 ```
 nova-skill/
-├── cli.py              # 交互式命令行界面（推荐日常使用）
-├── main.py             # FastAPI 后端服务
-├── src/nova/           # 核心框架代码
-│   ├── agent.py        # Agent 实现
-│   ├── skill.py        # Skill 管理
-│   └── tools.py        # 工具注册
+├── cli.py              # 交互式命令行界面（主入口）
+├── src/                # 核心框架代码
+│   ├── agent/          # Agent 实现
+│   │   └── agent.py    # ReAct 流式 Agent
+│   ├── core/           # 核心类型定义
+│   │   └── types.py    # ModelType, Event 类型等
+│   ├── display/        # 终端显示组件
+│   │   └── progress.py # 进度显示
+│   ├── skills/         # Skill 系统
+│   │   └── registry.py # Skill 注册管理
+│   ├── tasks/          # 任务规划
+│   │   ├── manager.py  # 任务管理器
+│   │   └── planner.py  # 任务规划工具
+│   └── tools/          # 工具集合
+│       ├── __init__.py # 工具自动发现
+│       ├── files.py    # 文件操作（mmap 优化）
+│       ├── network.py  # 网络请求
+│       ├── system.py   # 系统信息
+│       ├── time.py     # 时间工具
+│       ├── skills.py   # Skill 工具
+│       └── tasks.py    # 任务工具
 ├── skills/             # Skill 定义目录
 │   ├── antfu/          # Anthony Fu 开发规范
 │   ├── brainstorming/  # 头脑风暴
 │   └── writing-skills/ # 写作技巧
-├── scripts/            # 构建脚本
-│   ├── build.py        # 打包脚本
-│   └── nova-cli.spec   # PyInstaller 配置
-├── release/            # 打包后的可执行文件
 ├── tests/              # 测试文件
 ├── .env.example        # 环境变量模板
-├── pyproject.toml      # 项目配置
-└── requirements.txt    # 依赖列表
+└── pyproject.toml      # 项目配置
 ```
 
 ## 特性
 
-✅ **双模式支持** - 交互式 CLI + FastAPI 后端服务  
 ✅ **ReAct 流式输出** - 实时显示 AI 思考过程和工具调用  
 ✅ **多模型支持** - OpenAI / Anthropic / 其他兼容模型  
-✅ **框架能力** - 使用 LangChain `@tool` 装饰器自动注册工具  
+✅ **自动工具发现** - 使用 `@tool` 装饰器自动注册工具  
 ✅ **Skill 系统** - 模型按需读取 skill 详细内容  
+✅ **任务规划** - 支持复杂多步骤任务分解和跟踪  
+✅ **mmap 文件读取** - 高效的大文件随机访问  
 ✅ **跨平台** - Windows / Linux / macOS  
-✅ **日志记录** - loguru 日志管理
+✅ **内存会话** - 基于 LangGraph 的内存检查点
 
 ## 安装
 
-### 方式一：使用 uv（推荐）
-
 ```bash
-# 创建虚拟环境
+# 使用 uv（推荐）
 uv venv
-
-# 安装依赖
 uv pip install -e ".[dev]"
-```
 
-### 方式二：使用 pip
-
-```bash
+# 或使用 pip
 pip install -r requirements.txt
-```
-
-### 方式三：打包为可执行文件
-
-```bash
-# 打包 CLI 为可执行文件
-python scripts/build.py
-
-# 输出位置: release/nova.exe (Windows) 或 release/nova (Linux/Mac)
 ```
 
 ## 配置
 
 ```bash
-# 复制环境变量模板
 cp .env.example .env
 ```
 
 编辑 `.env`:
 
 ```env
-# ===== 模型配置 =====
-
-# 模型名称 (OpenAI: gpt-4o-mini, gpt-4o, etc. | Anthropic: claude-3-5-sonnet-20241022, etc.)
+# 模型配置
 MODEL=gpt-4o-mini
-
-# 温度参数 (0.0 - 2.0)
 TEMPERATURE=0.7
-
-# 强制指定模型类型 (auto | openai | anthropic)
 DEFAULT_MODEL_TYPE=auto
 
-# ===== OpenAI 配置 =====
+# OpenAI
 OPENAI_API_KEY=sk-...
-# OPENAI_BASE_URL=https://api.openai.com/v1  # 可选，用于第三方兼容
+# OPENAI_BASE_URL=https://api.openai.com/v1
 
-# ===== Anthropic 配置 =====
+# Anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-# ANTHROPIC_BASE_URL=https://api.anthropic.com  # 可选，用于第三方兼容
+# ANTHROPIC_BASE_URL=https://api.anthropic.com
 ```
 
 ## 使用方式
 
-### 方式一：CLI 交互模式（推荐）
-
-`cli.py` 提供交互式命令行界面，支持多轮对话和 ReAct 流式输出。
+### CLI 交互模式
 
 ```bash
 # 启动 CLI
 python cli.py
 
-# 或使用打包后的可执行文件
-./release/nova.exe
+# 指定模型
+python cli.py --model gpt-4o
+
+# 关闭 ReAct 模式
+python cli.py --no-react
 ```
 
 **CLI 命令：**
@@ -117,88 +106,27 @@ python cli.py
 | `/skills` | 显示已加载的 skills |
 | `/tools` | 显示已注册的工具 |
 | `/model` | 显示当前模型信息 |
-| `/react` | 切换 ReAct 模式（开/关） |
+| `/react` | 切换 ReAct 模式 |
+| `/plan` | 创建任务计划 |
+| `/tasks` | 显示任务计划状态 |
 
-**CLI 启动参数：**
-
-```bash
-# 指定模型
-python cli.py --model gpt-4o
-
-# 关闭 ReAct 模式
-python cli.py --no-react
-```
-
-### 方式二：FastAPI 后端服务
-
-`main.py` 提供 FastAPI 后端服务，支持 SSE 流式输出。
-
-```bash
-# 启动服务
-python main.py
-
-# 或使用 uvicorn 直接启动
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-**API 端点：**
-
-```bash
-# 健康检查
-curl http://localhost:8000/health
-
-# 获取模型信息
-curl http://localhost:8000/model
-
-# 获取所有 skills
-curl http://localhost:8000/skills
-
-# 流式对话
-curl -X POST "http://localhost:8000/chat?message=Hello"
-```
-
-## 工具（自动注册）
+## 工具列表
 
 | 工具 | 描述 |
 |------|------|
-| `search_web` | 搜索网络信息（DuckDuckGo） |
+| `read_file` | 读取文件（支持行范围，mmap 优化） |
+| `write_file` | 写入文件 |
+| `list_directory` | 列出目录 |
+| `get_file_info` | 获取文件信息 |
+| `execute_command` | 执行系统命令 |
+| `get_system_info` | 获取系统信息 |
+| `get_current_time` | 获取当前时间 |
 | `fetch_url` | 获取网页内容 |
-| `read_file` | 读取本地文件（跨平台） |
-| `write_file` | 写入本地文件（跨平台） |
-| `list_directory` | 列出目录内容 |
 | `get_available_skills` | 获取可用 skills |
 | `read_skill_detail` | 读取 skill 详细内容 |
-
-## Skill 格式
-
-Skills 存放在 `skills/` 目录下，每个 skill 是一个子目录，包含 `SKILL.md`：
-
-```markdown
-# Skill Name
-
-## 描述
-
-描述内容...
-
-## 能力标签
-
-- capability1
-- capability2
-
-## 代码规范
-
-- 语言: python
-- 库: xxx
-
-## 输出格式
-
-1. xxx
-2. xxx
-
-## 注意事项
-
-- xxx
-```
+| `create_task_plan` | 创建任务计划 |
+| `get_task_status` | 获取任务状态 |
+| `update_task_status` | 更新任务状态 |
 
 ## 开发
 
@@ -214,21 +142,6 @@ pytest
 ruff check .
 ruff format .
 ```
-
-## 打包发布
-
-```bash
-# 打包为可执行文件
-python scripts/build.py
-
-# 清理并重新打包
-python scripts/build.py --clean
-
-# 只清理构建文件
-python scripts/build.py --only-clean
-```
-
-打包后的文件位于 `release/` 目录，可直接复制到其他位置使用。
 
 ## 环境要求
 

@@ -1,126 +1,129 @@
 #!/usr/bin/env python3
 """
-Nova Skill - FastAPI 后端
+Nova Skill - Terminal Interactive Mode
 
-特性：
-- 支持 OpenAI / Anthropic / 其他模型
-- 纯后端流式输出（SSE）
-- 跨平台兼容
-- 使用 LangChain @tool 装饰器（框架能力）
+Features:
+- Supports streaming ReAct process (thinking, tool calls, results)
+- Supports multi-turn conversations
+- Colored output
 """
-import fix_httpx
 import os
 import sys
+import asyncio
+import argparse
 from pathlib import Path
-from contextlib import asynccontextmanager
+from datetime import datetime
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-# 配置日志
-logger.remove()
-logger.add(sys.stderr, level="INFO", format="{time:HH:MM:SS} | {level} | {message}")
-logger.add("logs/nova.log", rotation="10 MB", retention="7 days")
-
-# 加载环境变量
+# Load environment variables
 load_dotenv()
 
-# 添加 src 到路径
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Configure logging - only output to file, not terminal
+Path("logs").mkdir(exist_ok=True)
+logger.remove()  # Remove default terminal output
+logger.add("logs/cli.log", rotation="10 MB", retention="7 days", level="INFO")
 
-from nova.skill import SkillRegistry
-from nova.agent import Agent, AgentConfig
+from src import ModelType
+
+from src import SkillRegistry
+from src import Agent, AgentConfig
+from src import TaskManager
+from src import SimpleProgressDisplay
 
 
-# 全局变量
-agent = None
-skill_registry = None
+# Color codes
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
 
 
-def get_model_config() -> tuple:
-    """
-    获取模型配置
-    
-    支持 OPENAI_ 和 ANTHROPIC_ 前缀的环境变量
-    通过 DEFAULT_MODEL_TYPE 可以强制指定模型类型
-    """
-    # 获取模型类型配置 (openai | anthropic | auto)
-    model_type = os.getenv("DEFAULT_MODEL_TYPE", "auto").lower().strip()
-    
-    # 获取温度参数
-    try:
-        temperature = float(os.getenv("TEMPERATURE", "0.7"))
-    except ValueError:
-        logger.warning("Invalid TEMPERATURE value, using default 0.7")
-        temperature = 0.7
-    
-    # 获取模型名称
+def print_banner():
+    """Print welcome message"""
+    print(f"""
+{Colors.CYAN}{Colors.BOLD}
+╔══════════════════════════════════════════╗
+║           Nova Skill CLI                 ║
+║   AI Assistant with ReAct Streaming      ║
+╚══════════════════════════════════════════╝
+{Colors.ENDC}
+Type /help for commands, /quit to exit
+""")
+
+
+def print_help():
+    """Print help information"""
+    print(f"""
+{Colors.BOLD}Available Commands:{Colors.ENDC}
+  /help      - Show this help
+  /quit      - Exit the program
+  /clear     - Clear screen
+  /skills    - Show loaded skills
+  /tools     - Show registered tools
+  /model     - Show current model info
+  /react     - Toggle ReAct mode (on/off)
+  /plan      - Create task plan for complex requests
+  /tasks     - Show current task plan status
+
+{Colors.BOLD}Tips:{Colors.ENDC}
+  - Type your question directly to chat with AI
+  - ReAct mode shows AI's thinking process and tool calls
+  - Use /plan for complex multi-step tasks
+""")
+
+
+def get_model_config():
+    """Get model configuration"""
     model = os.getenv("MODEL", "gpt-4o-mini")
     
-    # 根据模型类型或模型名称确定 provider
-    is_anthropic = False
-    if model_type == "anthropic":
-        is_anthropic = True
-        logger.info(f"Using forced Anthropic model type: {model}")
-    elif model_type == "openai":
-        is_anthropic = False
-        logger.info(f"Using forced OpenAI model type: {model}")
-    else:
-        # auto mode: detect from model name
-        is_anthropic = "claude" in model.lower()
-        provider = "Anthropic" if is_anthropic else "OpenAI-compatible"
-        logger.info(f"Auto-detected {provider} model: {model}")
-    
-    if is_anthropic:
-        # Anthropic 配置
+    if "claude" in model.lower():
         api_key = os.getenv("ANTHROPIC_API_KEY")
-        base_url = os.getenv("ANTHROPIC_BASE_URL")  # 可选，用于第三方兼容
-        
+        base_url = os.getenv("ANTHROPIC_BASE_URL")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY not set")
-        
-        return model, api_key, base_url, temperature, "anthropic"
-    
+        provider = ModelType.ANTHROPIC.value
     else:
-        # OpenAI 或其他兼容模型 (默认)
         api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")  # 可选，用于第三方兼容
-        
+        base_url = os.getenv("OPENAI_BASE_URL")
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set")
-        
-        return model, api_key, base_url, temperature, "openai"
+        provider = ModelType.OPENAI.value
+    
+    return model, api_key, base_url, provider
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    global agent, skill_registry
+async def run_cli():
+    """Run CLI interaction"""
+    print_banner()
     
-    logger.info("🚀 Starting Nova Skill...")
+    # Get configuration
+    try:
+        model, api_key, base_url, provider = get_model_config()
+        print(f"{Colors.GREEN}✓ Model: {model} ({provider}){Colors.ENDC}\n")
+    except RuntimeError as e:
+        print(f"{Colors.RED}✗ Error: {e}{Colors.ENDC}")
+        return
     
-    # 获取模型配置
-    model, api_key, base_url, temperature, model_type = get_model_config()
-    
-    # 跨平台路径处理
+    # Load skills
     skills_dir = Path(__file__).parent / "skills"
-    logger.info(f"Skills directory: {skills_dir}")
-    
-    # 加载 Skills
-    logger.info("Loading skills...")
     skill_registry = SkillRegistry(skills_dir)
     
-    # 创建 Agent
-    logger.info("Creating agent...")
+    available_skills = [s.name for s in skill_registry.list_all()]
+    if available_skills:
+        print(f"{Colors.GREEN}✓ Loaded skills: {', '.join(available_skills)}{Colors.ENDC}\n")
+    
+    # Create Agent
     config = AgentConfig(
-        name="nova",
+        name="src",
         model=model,
-        temperature=temperature,
-        model_type=model_type,
-        skills=["coder"] if skill_registry.get("coder") else []
+        skills=available_skills
     )
     
     agent = Agent(
@@ -130,99 +133,161 @@ async def lifespan(app: FastAPI):
         base_url=base_url
     )
     
-    logger.info("✅ Nova Skill ready!")
-    yield
+    print(f"{Colors.GREEN}✓ Agent ready!{Colors.ENDC}\n")
+
+    # State
+    react_mode = True  # Default ReAct mode on
+    thread_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Task planning
+    progress_display = SimpleProgressDisplay()
+    task_manager = TaskManager()
     
-    logger.info("👋 Shutting down...")
-
-
-# 创建 FastAPI 应用
-app = FastAPI(
-    title="Nova Skill API",
-    description="支持 OpenAI / Anthropic 的 Skill + Tool 框架",
-    version="0.1.0",
-    lifespan=lifespan
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/health")
-async def health():
-    """健康检查"""
-    return {
-        "status": "healthy",
-        "agent": agent is not None,
-        "model": agent.config.model if agent else None
-    }
-
-
-@app.get("/model")
-async def get_model_info():
-    """获取当前模型信息"""
-    if not agent:
-        return {"error": "Agent not initialized"}
-    
-    return {
-        "model": agent.config.model,
-        "provider": "anthropic" if agent.config.is_anthropic else "openai",
-        "model_type": agent.config.model_type,
-        "temperature": agent.config.temperature,
-        "skills_loaded": [s.name for s in agent._skills_loaded]
-    }
-
-
-@app.get("/skills")
-async def list_skills():
-    """列出所有 skills"""
-    if not skill_registry:
-        return {"skills": []}
-    
-    skills = []
-    for s in skill_registry.list_all():
-        skills.append({
-            "name": s.name,
-            "description": s.description[:100] if s.description else "",
-            "capabilities": s.capabilities
-        })
-    
-    return {"skills": skills}
-
-
-@app.post("/chat")
-async def chat(message: str):
-    """
-    流式对话
-    
-    返回 SSE 格式流
-    """
-    if not agent:
-        return StreamingResponse(
-            iter(["data: Agent not initialized\n\n"]),
-            media_type="text/event-stream"
-        )
-    
-    async def event_generator():
+    # Interaction loop
+    while True:
         try:
-            async for chunk in agent.astream(message):
-                yield f"data: {chunk}\n\n"
-            yield "data: [DONE]\n\n"
+            # Get input
+            user_input = input(f"{Colors.BOLD}You>{Colors.ENDC} ").strip()
+            
+            if not user_input:
+                continue
+            
+            # Process commands
+            if user_input.startswith('/'):
+                cmd = user_input.lower()
+                
+                if cmd == '/quit':
+                    print(f"\n{Colors.YELLOW}Goodbye!{Colors.ENDC}")
+                    break
+                
+                elif cmd == '/help':
+                    print_help()
+                
+                elif cmd == '/clear':
+                    os.system('cls' if os.name == 'nt' else 'clear')
+                    print_banner()
+                
+                elif cmd == '/skills':
+                    print(f"\n{Colors.BOLD}Loaded skills:{Colors.ENDC}")
+                    for skill in skill_registry.list_all():
+                        print(f"  • {skill.name}: {skill.description[:60]}...")
+                        if skill.metadata:
+                            print(f"    Metadata: {skill.metadata}")
+                    print()
+                
+                elif cmd == '/tools':
+                    from src.tools import get_all_tools, set_global_registry, set_global_task_manager
+
+                    # Set global instances for tool registration
+                    set_global_registry(skill_registry)
+                    set_global_task_manager(task_manager)
+
+                    print(f"\n{Colors.BOLD}Registered tools:{Colors.ENDC}")
+                    tools = get_all_tools()
+                    n = 1
+                    for tool in tools:
+                        desc = tool.description if tool.description else "No description"
+                        desc = desc if len(desc) < 100 else desc[:100] + "..."
+                        print(f"# {n}.\n{tool.name}: \n{desc}\n")
+                        n += 1
+                    print()
+                
+                elif cmd == '/model':
+                    print(f"\n{Colors.BOLD}Model Info:{Colors.ENDC}")
+                    print(f"  Model: {model}")
+                    print(f"  Provider: {provider}")
+                    print(f"  Temperature: {config.temperature}")
+                    print(f"  ReAct Mode: {'ON' if react_mode else 'OFF'}")
+                    print(f"  Thread ID: {thread_id}\n")
+                
+                elif cmd == '/react':
+                    react_mode = not react_mode
+                    status = "ON" if react_mode else "OFF"
+                    print(f"{Colors.YELLOW}ReAct mode {status}{Colors.ENDC}\n")
+
+                elif cmd == '/plan':
+                    print(f"\n{Colors.CYAN}Enter task description for planning:{Colors.ENDC}")
+                    plan_query = input(f"{Colors.BOLD}Plan>{Colors.ENDC} ").strip()
+                    if plan_query:
+                        print(f"\n{Colors.YELLOW}🔄 Creating task plan...{Colors.RESET}")
+                        try:
+                            plan = await agent.create_task_plan(plan_query)
+                            print(f"{Colors.GREEN}✓ Task plan created with {len(plan.tasks)} tasks{Colors.RESET}\n")
+
+                            # Display task list
+                            for task in plan.tasks:
+                                deps = f" (depends on: {task.blocked_by})" if task.blocked_by else ""
+                                print(f"  ○ {task.subject}{deps}")
+
+                            print(f"\n{Colors.DIM}Use '/tasks' to check progress{Colors.RESET}\n")
+                        except Exception as e:
+                            print(f"{Colors.RED}✗ Failed to create plan: {e}{Colors.RESET}\n")
+
+                elif cmd == '/tasks':
+                    plan = agent.get_current_task_plan()
+                    if plan:
+                        progress_display.print_summary(plan)
+                    else:
+                        print(f"{Colors.YELLOW}No active task plan. Use /plan to create one.{Colors.RESET}\n")
+
+                else:
+                    print(f"{Colors.RED}Unknown command: {user_input}{Colors.ENDC}")
+                    print("Type /help for available commands\n")
+
+                continue
+            
+            # Process conversation
+            print(f"\n{Colors.BOLD}{Colors.BLUE}AI>{Colors.ENDC}")
+            
+            if react_mode:
+                # ReAct mode - show content and tool calls
+                async for event in agent.astream_react(user_input, thread_id):
+                    if event.type.value == "content":
+                        # AI output content (streaming)
+                        print(event.content, end="", flush=True)
+
+                    elif event.type.value == "tool_call":
+                        print(f"\n{Colors.YELLOW}[Tool: {event.name}] {event.args}{Colors.ENDC}")
+
+                    elif event.type.value == "tool_result":
+                        preview = event.content[:200] + " ..." if len(event.content) > 150 else event.content
+                        print(f"{Colors.GREEN}[Result: {preview}]{Colors.ENDC}\n")
+
+                    elif event.type.value == "error":
+                        print(f"{Colors.RED}[Error: {event.content}]{Colors.ENDC}")
+            
+            else:
+                # Normal mode - only show final response
+                async for chunk in agent.astream(user_input, thread_id):
+                    print(chunk, end="", flush=True)
+            
+            print(f"\n{Colors.ENDC}\n")
+        
+        except KeyboardInterrupt:
+            print(f"\n\n{Colors.YELLOW}Goodbye!{Colors.ENDC}")
+            break
         except Exception as e:
-            logger.error(f"Stream error: {e}")
-            yield f"data: Error: {e}\n\n"
+            print(f"{Colors.RED}Error: {e}{Colors.ENDC}\n")
+
+
+def main():
+    """Entry function"""
+    parser = argparse.ArgumentParser(description="Nova Skill CLI")
+    parser.add_argument("--model", help="Override default model")
+    parser.add_argument("--no-react", action="store_true", help="Disable ReAct mode")
+    args = parser.parse_args()
     
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream"
-    )
+    # Override environment variable if model specified
+    if args.model:
+        os.environ["MODEL"] = args.model
+    
+    # Run CLI
+    try:
+        asyncio.run(run_cli())
+    except Exception as e:
+        print(f"{Colors.RED}Startup failed: {e}{Colors.ENDC}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    main()
