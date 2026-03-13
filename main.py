@@ -8,6 +8,7 @@ Nova Skill - FastAPI 后端
 - 跨平台兼容
 - 使用 LangChain @tool 装饰器（框架能力）
 """
+import fix_httpx
 import os
 import sys
 from pathlib import Path

@@ -65,7 +65,7 @@ def search_web(query: Annotated[str, "Search query"]) -> str:
         # Use ddgs (new package name) with retries and timeout
         from ddgs import DDGS
         
-        with DDGS(timeout=20) as ddgs:
+        with DDGS(timeout=5) as ddgs:
             results = list(ddgs.text(query, max_results=5))
             
             if not results:
@@ -89,7 +89,7 @@ def search_web(query: Annotated[str, "Search query"]) -> str:
 def fetch_url(url: Annotated[str, "Webpage URL"]) -> str:
     """Fetch content from a URL"""
     try:
-        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+        with httpx.Client(timeout=5.0, follow_redirects=True) as client:
             response = client.get(url)
             response.raise_for_status()
             

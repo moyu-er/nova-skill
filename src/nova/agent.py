@@ -170,21 +170,7 @@ class Agent:
         parts.append(f"\nCurrent Operating System: {platform.system()}")
         parts.append(f"Path Separator: {'\\\\' if platform.system() == 'Windows' else '/'}")
         parts.append("Use appropriate path formats for the current OS.")
-        
-        # Tell model what tools are available
-        parts.append("\nYou can use the following tools:")
-        parts.append("- get_system_info: Get current OS and environment information")
-        parts.append("- search_web: Search for information on the web")
-        parts.append("- fetch_url: Fetch content from a URL")
-        parts.append("- read_file: Read a local file (supports ~ for home directory)")
-        parts.append("- write_file: Write to a local file (creates directories if needed)")
-        parts.append("- list_directory: List directory contents with sizes and timestamps")
-        parts.append("- execute_command: Execute shell commands (use with caution)")
-        parts.append("- get_current_time: Get current date and time for a specific timezone")
-        parts.append("- list_timezones: List available timezones")
-        parts.append("- get_available_skills: Get list of available skills")
-        parts.append("- read_skill_detail: Read detailed content of a specific skill")
-        
+
         # Tell model what skills are available (only names and descriptions, not full content)
         if self._skills_loaded:
             parts.append("\nYou can use the following skills (load details on demand):")

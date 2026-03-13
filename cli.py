@@ -7,6 +7,7 @@ Features:
 - Supports multi-turn conversations
 - Colored output
 """
+import fix_httpx
 import os
 import sys
 import asyncio
