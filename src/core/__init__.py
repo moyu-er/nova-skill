@@ -10,6 +10,7 @@ from .types import (
     ToolResultEvent,
     ErrorEvent,
     ReactEvent,
+    ToolCallAccumulator,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     'ToolResultEvent',
     'ErrorEvent',
     'ReactEvent',
+    'ToolCallAccumulator',
 ]

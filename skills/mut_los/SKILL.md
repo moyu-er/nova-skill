@@ -1,9 +1,98 @@
 ---
-name: mut-los-alarm-troubleshooting
+name: mut_los
 description: >-
   XXX 网元 MUT_LOS 告警排障流程。当用户输入网元告警排障请求（如"XXX网元MUT_LOS告警如何处理"、
   "帮我排查XXX网元的光中断告警"）时触发。共 24 步，涵盖告警查询、模式识别、
   站内/站间故障判断、光功率查询、修复建议输出。
+---
+
+# Gateway 工具使用说明
+
+本 Skill 使用 Tool Gateway 进行工具调用。所有工具都通过 `gateway_call_tool` 统一调用。
+
+## 工具调用方式
+
+使用 `gateway_call_tool` 工具，参数如下：
+- `tool_name`: 要调用的工具名称（见下方工具列表）
+- `params`: 工具参数（JSON 对象）
+
+## 工具查询方式
+
+使用 `gateway_query_tool` 工具可以查询：
+- 所有可用工具列表：`{}`
+- 特定工具详情：`{"tool_name": "queryAlarmList"}`
+- 按场景查找工具：`{"scenario": "告警查询"}`
+
+## 可用工具列表
+
+```yaml
+tools:
+  - name: queryAlarmList
+    description: 查询当前和历史告警列表，获取网元的告警信息
+    category: mut_los
+    scenarios:
+      - 用户询问告警状态时
+      - 开始MUT_LOS排障流程时
+      - 需要获取告警列表进行模式分析时
+
+  - name: queryAffectedService
+    description: 查询告警影响的业务列表
+    category: mut_los
+    scenarios:
+      - 需要了解告警对业务的影响时
+      - 生成排障报告时
+      - 评估故障影响范围时
+
+  - name: queryFaultSeqNo
+    description: 根据eventId查询故障流水号
+    category: mut_los
+    scenarios:
+      - 获取告警的故障流水号用于后续查询
+      - 开始深度故障分析时
+
+  - name: queryAlarmGroupList
+    description: 根据故障流水号查询告警组中的告警列表
+    category: mut_los
+    scenarios:
+      - 分析关联告警时
+      - 统计告警数量时
+
+  - name: queryFaultSegment
+    description: 根据故障流水号查询故障段信息，判断是站内还是站间故障
+    category: mut_los
+    scenarios:
+      - 确定故障范围时
+      - 判断需要站内还是站间排查流程时
+
+  - name: queryMonitorPort
+    description: 查询路径对应的监控板端口
+    category: mut_los
+    scenarios:
+      - 站间故障排查时
+      - 需要获取监控端口信息时
+
+  - name: queryPortOpticalPower
+    description: 查询端口当前光功率
+    category: mut_los
+    scenarios:
+      - 需要检查光功率状态时
+      - 判断光信号是否正常时
+
+  - name: queryOAOpticalPower
+    description: 查询光纤延伸至两端OA的输入/输出光功率
+    category: mut_los
+    scenarios:
+      - 站间故障深度分析时
+      - 判断光路是否中断时
+
+  - name: queryPortHistoryPower
+    description: 查询端口历史光功率
+    category: mut_los
+    scenarios:
+      - 分析光功率变化趋势时
+      - 站内故障排查时
+```
+
 ---
 
 # MUT_LOS 告警排障 Skill
@@ -24,131 +113,25 @@ description: >-
 
 ---
 
-## API 字段说明
+## 工具调用示例
 
-> 以下为本 Skill 涉及的所有 API，供构建 tool_list 使用。
+### Step 2: 查询告警状态
 
-```yaml
-apis:
-  - id: queryAlarmList
-    description: 查询当前和历史告警列表
-    method: POST
-    path: /api/alarm/queryAlarmList
-    request_fields:
-      - name: neName        # 网元名称
-      - name: boardName     # 单板名称
-      - name: portName      # 端口名称
-      - name: alarmType     # 告警类型，如 MUT_LOS
-      - name: startTime     # 查询起始时间（历史告警用）
-      - name: endTime       # 查询结束时间（历史告警用）
-    response_fields:
-      - name: alarmId       # 告警 ID
-      - name: alarmStatus   # 告警状态：ACTIVE / CLEARED
-      - name: eventId       # 关联事件 ID（后续步骤使用）
-      - name: occurTime     # 告警发生时间
-      - name: clearTime     # 告警清除时间（CLEARED 时有值）
-
-  - id: queryAffectedService
-    description: 查询告警影响的业务
-    method: POST
-    path: /api/service/queryAffectedService
-    request_fields:
-      - name: alarmId       # 告警 ID，来自 queryAlarmList 响应
-    response_fields:
-      - name: serviceList   # 受影响业务列表
-      - name: serviceId
-      - name: serviceName
-      - name: serviceType
-
-  - id: queryFaultSeqNo
-    description: 根据 eventId 查询故障流水号
-    method: GET
-    path: /api/fault/queryFaultSeqNo
-    request_fields:
-      - name: eventId       # 来自 queryAlarmList 响应的 eventId
-    response_fields:
-      - name: faultSeqNo    # 故障流水号（后续步骤使用）
-
-  - id: queryAlarmGroupList
-    description: 根据故障流水号查询告警组中的告警列表
-    method: GET
-    path: /api/fault/queryAlarmGroupList
-    request_fields:
-      - name: faultSeqNo    # 来自 queryFaultSeqNo 响应
-    response_fields:
-      - name: alarmCount    # 关联告警总数
-      - name: alarmList     # 告警列表
-      - name: portModn      # 宿端口 modn（站内故障 Step 22 使用）
-
-  - id: queryFaultSegment
-    description: 根据故障流水号查询故障段
-    method: GET
-    path: /api/fault/queryFaultSegment
-    request_fields:
-      - name: faultSeqNo    # 来自 queryFaultSeqNo 响应
-    response_fields:
-      - name: segmentType   # 故障段类型：INTRA_SITE（站内）/ INTER_SITE（站间）
-      - name: srcNode       # 故障段源端节点
-      - name: dstNode       # 故障段宿端节点
-      - name: srcPort       # 源端口
-      - name: dstPort       # 宿端口
-      - name: dstPortModn   # 宿端口 modn
-
-  - id: queryMonitorPort
-    description: 查询路径对应的监控板端口
-    method: POST
-    path: /api/port/queryMonitorPort
-    request_fields:
-      - name: faultSeqNo
-      - name: srcNode
-      - name: dstNode
-    response_fields:
-      - name: monitorPortId
-      - name: monitorPortName
-      - name: boardName
-
-  - id: queryPortOpticalPower
-    description: 查询端口当前光功率（监控光功率和普通端口光功率复用此接口）
-    method: GET
-    path: /api/optical/queryPortOpticalPower
-    request_fields:
-      - name: neName
-      - name: boardName
-      - name: portName
-    response_fields:
-      - name: rxPower       # 接收光功率（dBm）
-      - name: txPower       # 发送光功率（dBm）
-      - name: threshold     # 光功率阈值
-      - name: status        # 正常 / 异常
-
-  - id: queryOAOpticalPower
-    description: 查询光纤延伸至两端 OA 的输入/输出光功率
-    method: POST
-    path: /api/optical/queryOAOpticalPower
-    request_fields:
-      - name: faultSeqNo
-      - name: monitorPortId
-    response_fields:
-      - name: oaInputPower    # OA 输入光功率（dBm）
-      - name: oaOutputPower   # OA 输出光功率（dBm）
-      - name: interruptPoint  # 中断点位置（监控光中断时有值）
-      - name: isInterrupted   # 布尔值：监控光是否中断
-
-  - id: queryPortHistoryPower
-    description: 查询端口历史光功率
-    method: POST
-    path: /api/optical/queryPortHistoryPower
-    request_fields:
-      - name: neName
-      - name: portModn        # 宿端口 modn，来自 queryAlarmGroupList 或 queryFaultSegment
-      - name: startTime
-      - name: endTime
-    response_fields:
-      - name: historyPowerList
-      - name: timestamp
-      - name: rxPower
-      - name: txPower
+**类型**：API 调用（通过 Gateway）  
+**工具**：`gateway_call_tool`  
+**参数**：
+```json
+{
+  "tool_name": "queryAlarmList",
+  "params": {
+    "neName": "<Step 1 提取的 neName>",
+    "boardName": "<Step 1 提取的 boardName>",
+    "portName": "<Step 1 提取的 portName>",
+    "alarmType": "MUT_LOS"
+  }
+}
 ```
+**将响应完整保存为** `alarmList`，后续步骤引用。
 
 ---
 
@@ -174,15 +157,18 @@ alarmType  = "MUT_LOS"
 
 ### Step 2: 查询告警状态
 
-**类型**：API 调用  
-**调用**：`queryAlarmList`  
-**请求参数**：
+**类型**：API 调用（通过 Gateway）  
+**工具**：`gateway_call_tool`  
+**参数**：
 ```json
 {
-  "neName": "<Step 1 提取的 neName>",
-  "boardName": "<Step 1 提取的 boardName>",
-  "portName": "<Step 1 提取的 portName>",
-  "alarmType": "MUT_LOS"
+  "tool_name": "queryAlarmList",
+  "params": {
+    "neName": "<Step 1 提取的 neName>",
+    "boardName": "<Step 1 提取的 boardName>",
+    "portName": "<Step 1 提取的 portName>",
+    "alarmType": "MUT_LOS"
+  }
 }
 ```
 **将响应完整保存为** `alarmList`，后续步骤引用。
@@ -269,12 +255,15 @@ alarmType  = "MUT_LOS"
 
 ### Step 8: 查询影响业务
 
-**类型**：API 调用  
-**调用**：`queryAffectedService`  
-**请求参数**：
+**类型**：API 调用（通过 Gateway）  
+**工具**：`gateway_call_tool`  
+**参数**：
 ```json
 {
-  "alarmId": "<alarmList 中第一条 ACTIVE 告警的 alarmId>"
+  "tool_name": "queryAffectedService",
+  "params": {
+    "alarmId": "<alarmList 中第一条 ACTIVE 告警的 alarmId>"
+  }
 }
 ```
 **将响应保存为** `affectedServices`，并追加输出至 Step 7 的结论中：
@@ -293,12 +282,15 @@ alarmType  = "MUT_LOS"
 
 ### Step 10: 根据 event 查询故障流水号
 
-**类型**：API 调用  
-**调用**：`queryFaultSeqNo`  
-**请求参数**：
+**类型**：API 调用（通过 Gateway）  
+**工具**：`gateway_call_tool`  
+**参数**：
 ```json
 {
-  "eventId": "<alarmList 中第一条 ACTIVE 告警的 eventId>"
+  "tool_name": "queryFaultSeqNo",
+  "params": {
+    "eventId": "<alarmList 中第一条 ACTIVE 告警的 eventId>"
+  }
 }
 ```
 **将响应中的 `faultSeqNo` 保存**，后续 Step 11、13、16 使用。
@@ -307,12 +299,15 @@ alarmType  = "MUT_LOS"
 
 ### Step 11: 根据故障流水号查询告警组中告警列表
 
-**类型**：API 调用  
-**调用**：`queryAlarmGroupList`  
-**请求参数**：
+**类型**：API 调用（通过 Gateway）  
+**工具**：`gateway_call_tool`  
+**参数**：
 ```json
 {
-  "faultSeqNo": "<Step 10 获取的 faultSeqNo>"
+  "tool_name": "queryAlarmGroupList",
+  "params": {
+    "faultSeqNo": "<Step 10 获取的 faultSeqNo>"
+  }
 }
 ```
 **将响应完整保存为** `alarmGroupResult`。
@@ -330,12 +325,15 @@ alarmType  = "MUT_LOS"
 
 ### Step 13: 根据故障流水号查询故障段
 
-**类型**：API 调用  
-**调用**：`queryFaultSegment`  
-**请求参数**：
+**类型**：API 调用（通过 Gateway）  
+**工具**：`gateway_call_tool`  
+**参数**：
 ```json
 {
-  "faultSeqNo": "<Step 10 获取的 faultSeqNo>"
+  "tool_name": "queryFaultSegment",
+  "params": {
+    "faultSeqNo": "<Step 10 获取的 faultSeqNo>"
+  }
 }
 ```
 **将响应完整保存为** `faultSegment`。
@@ -365,14 +363,17 @@ alarmType  = "MUT_LOS"
 
 ### Step 16: 查询路径对应监控板端口
 
-**类型**：API 调用  
-**调用**：`queryMonitorPort`  
-**请求参数**：
+**类型**：API 调用（通过 Gateway）  
+**工具**：`gateway_call_tool`  
+**参数**：
 ```json
 {
-  "faultSeqNo": "<faultSeqNo>",
-  "srcNode": "<faultSegment.srcNode>",
-  "dstNode": "<faultSegment.dstNode>"
+  "tool_name": "queryMonitorPort",
+  "params": {
+    "faultSeqNo": "<faultSeqNo>",
+    "srcNode": "<faultSegment.srcNode>",
+    "dstNode": "<faultSegment.dstNode>"
+  }
 }
 ```
 **将响应保存为** `monitorPort`。
@@ -381,14 +382,17 @@ alarmType  = "MUT_LOS"
 
 ### Step 17: 查询监控光功率
 
-**类型**：API 调用  
-**调用**：`queryPortOpticalPower`  
-**请求参数**：
+**类型**：API 调用（通过 Gateway）  
+**工具**：`gateway_call_tool`  
+**参数**：
 ```json
 {
-  "neName": "<neName>",
-  "boardName": "<monitorPort.boardName>",
-  "portName": "<monitorPort.monitorPortName>"
+  "tool_name": "queryPortOpticalPower",
+  "params": {
+    "neName": "<neName>",
+    "boardName": "<monitorPort.boardName>",
+    "portName": "<monitorPort.monitorPortName>"
+  }
 }
 ```
 **将响应保存为** `monitorOpticalPower`。
@@ -397,13 +401,16 @@ alarmType  = "MUT_LOS"
 
 ### Step 18: 查询两端 OA 光功率
 
-**类型**：API 调用  
-**调用**：`queryOAOpticalPower`  
-**请求参数**：
+**类型**：API 调用（通过 Gateway）  
+**工具**：`gateway_call_tool`  
+**参数**：
 ```json
 {
-  "faultSeqNo": "<faultSeqNo>",
-  "monitorPortId": "<monitorPort.monitorPortId>"
+  "tool_name": "queryOAOpticalPower",
+  "params": {
+    "faultSeqNo": "<faultSeqNo>",
+    "monitorPortId": "<monitorPort.monitorPortId>"
+  }
 }
 ```
 **将响应保存为** `oaPowerResult`。
@@ -466,25 +473,31 @@ alarmType  = "MUT_LOS"
 
 ### Step 23: 查询宿端口当前光功率和历史光功率
 
-**类型**：API 调用（并行执行两个接口）
+**类型**：API 调用（并行执行两个接口，都通过 Gateway）
 
-**调用 1**：`queryPortOpticalPower`  
+**调用 1**：`gateway_call_tool`  
 ```json
 {
-  "neName": "<neName>",
-  "boardName": "<faultSegment.dstPort 所在单板>",
-  "portName": "<faultSegment.dstPort>"
+  "tool_name": "queryPortOpticalPower",
+  "params": {
+    "neName": "<neName>",
+    "boardName": "<faultSegment.dstPort 所在单板>",
+    "portName": "<faultSegment.dstPort>"
+  }
 }
 ```
 **保存响应为** `dstPortCurrentPower`。
 
-**调用 2**：`queryPortHistoryPower`  
+**调用 2**：`gateway_call_tool`  
 ```json
 {
-  "neName": "<neName>",
-  "portModn": "<dstPortModn>",
-  "startTime": "<告警发生时间前 24 小时>",
-  "endTime": "<当前时间>"
+  "tool_name": "queryPortHistoryPower",
+  "params": {
+    "neName": "<neName>",
+    "portModn": "<dstPortModn>",
+    "startTime": "<告警发生时间前 24 小时>",
+    "endTime": "<当前时间>"
+  }
 }
 ```
 **保存响应为** `dstPortHistoryPower`。

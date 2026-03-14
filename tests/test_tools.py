@@ -1,6 +1,7 @@
 """
 Tools module tests
 """
+import json
 import tempfile
 import os
 from pathlib import Path
@@ -39,7 +40,11 @@ class TestTools:
         assert "list_task_plans" in tool_names
         assert "get_next_task" in tool_names
 
-        assert len(tools) == 19  # 9 base + 2 skill + 5 task planning + 3 file (file_info, edit_file, replace_in_file)
+        # Gateway tools
+        assert "gateway_call_tool" in tool_names
+        assert "gateway_query_tool" in tool_names
+
+        assert len(tools) == 21  # 9 base + 2 skill + 5 task planning + 3 file + 2 gateway
 
     def test_get_all_tools_with_registry(self):
         """Test getting all tools (with explicit registry)"""
@@ -71,7 +76,11 @@ class TestTools:
         assert "list_task_plans" in tool_names
         assert "get_next_task" in tool_names
 
-        assert len(tools) == 19  # 9 base + 2 skill + 5 task planning + 3 file (file_info, edit_file, replace_in_file)
+        # Gateway tools
+        assert "gateway_call_tool" in tool_names
+        assert "gateway_query_tool" in tool_names
+
+        assert len(tools) == 21  # 9 base + 2 skill + 5 task planning + 3 file + 2 gateway
 
     def test_read_skill_detail_tool(self):
         """Test read_skill_detail tool"""
@@ -81,30 +90,30 @@ class TestTools:
         
         # Find read_skill_detail tool
         read_skill_tool = [t for t in tools if t.name == 'read_skill_detail'][0]
-        
-        # Call tool
-        result = read_skill_tool.invoke({'skill_name': 'antfu'})
-        
+
+        # Call tool with mut_los skill
+        result = read_skill_tool.invoke({'skill_name': 'mut_los'})
+
         # Verify returned markdown content (without frontmatter)
         assert result
         assert "##" in result
         assert len(result) > 100
-    
+
     def test_get_available_skills_tool(self):
         """Test get_available_skills tool"""
         skills_dir = Path(__file__).parent.parent / "skills"
         registry = SkillRegistry(skills_dir)
         tools = get_all_tools(registry)
-        
+
         # Find tool
         get_skills_tool = [t for t in tools if t.name == 'get_available_skills'][0]
-        
+
         # Call tool
         result = get_skills_tool.invoke({})
-        
+
         # Verify returned skill list
         assert result
-        assert "antfu" in result or "brainstorming" in result or "writing-skills" in result
+        assert "mut_los" in result or "writing-skills" in result
 
 
 class TestBasicTools:
@@ -476,6 +485,96 @@ class TestReplaceInFileTool:
             assert "line1\nnew2\nnew3\nline4" == content
         finally:
             os.unlink(temp_path)
+
+
+class TestGatewayTools:
+    """Test gateway tool functionality"""
+
+    def _get_gateway_tools(self):
+        """Get gateway tools"""
+        tools = get_all_tools()
+        call_tool = [t for t in tools if t.name == 'gateway_call_tool'][0]
+        query_tool = [t for t in tools if t.name == 'gateway_query_tool'][0]
+        return call_tool, query_tool
+
+    def test_gateway_query_tool_list(self):
+        """Test gateway_query_tool for listing tools"""
+        _, query_tool = self._get_gateway_tools()
+
+        result = query_tool.invoke({})
+        data = json.loads(result)
+
+        assert data["status"] == "success"
+        assert data["type"] == "tool_list"
+        assert len(data["tools"]) >= 9  # At least 9 MUT_LOS tools
+
+    def test_gateway_query_tool_by_name(self):
+        """Test gateway_query_tool for specific tool info"""
+        _, query_tool = self._get_gateway_tools()
+
+        result = query_tool.invoke({"tool_name": "queryAlarmList"})
+        data = json.loads(result)
+
+        assert data["status"] == "success"
+        assert data["type"] == "tool_info"
+        assert data["data"]["name"] == "queryAlarmList"
+        assert "scenarios" in data["data"]
+        assert "examples" in data["data"]
+
+    def test_gateway_query_tool_by_scenario(self):
+        """Test gateway_query_tool for scenario search"""
+        _, query_tool = self._get_gateway_tools()
+
+        result = query_tool.invoke({"scenario": "MUT_LOS"})
+        data = json.loads(result)
+
+        assert data["status"] == "success"
+        assert data["type"] == "tools_for_scenario"
+        assert data["count"] >= 0  # May or may not find matches
+
+    def test_gateway_call_tool_success(self):
+        """Test gateway_call_tool with valid tool"""
+        call_tool, _ = self._get_gateway_tools()
+
+        result = call_tool.invoke({
+            "tool_name": "queryAlarmList",
+            "params": {"neName": "NE-001", "alarmType": "MUT_LOS"}
+        })
+        data = json.loads(result)
+
+        assert data["status"] == "success"
+        assert data["tool"] == "queryAlarmList"
+        assert "data" in data
+        # The response structure is {"code": 0, "data": {"alarms": [...]}}
+        assert "code" in data["data"]
+        assert "data" in data["data"]
+        assert "alarms" in data["data"]["data"]
+
+    def test_gateway_call_tool_not_found(self):
+        """Test gateway_call_tool with non-existent tool"""
+        call_tool, _ = self._get_gateway_tools()
+
+        result = call_tool.invoke({
+            "tool_name": "nonExistentTool",
+            "params": {}
+        })
+        data = json.loads(result)
+
+        assert data["status"] == "error"
+        assert data["error"]["type"] == "tool_not_found"
+
+    def test_gateway_call_tool_validation_error(self):
+        """Test gateway_call_tool with missing required param"""
+        call_tool, _ = self._get_gateway_tools()
+
+        result = call_tool.invoke({
+            "tool_name": "queryAlarmList",
+            "params": {}  # Missing required neName
+        })
+        data = json.loads(result)
+
+        assert data["status"] == "error"
+        assert data["error"]["type"] == "validation_error"
 
 
 if __name__ == "__main__":

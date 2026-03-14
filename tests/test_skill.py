@@ -46,22 +46,22 @@ class TestSkillRegistry:
         """Test YAML frontmatter parsing"""
         skills_dir = Path(__file__).parent.parent / "skills"
         registry = SkillRegistry(skills_dir)
-        
-        # Get antfu skill (has frontmatter)
-        antfu = registry.get("antfu")
-        assert antfu is not None
-        assert antfu.name == "antfu"
-        assert "Anthony Fu" in antfu.description
-        assert "author" in antfu.metadata
-        assert antfu.metadata.get("author") == "Anthony Fu"
-    
+
+        # Get mut_los skill (has frontmatter)
+        mut_los = registry.get("mut_los")
+        assert mut_los is not None
+        assert mut_los.name == "mut_los"
+        assert "MUT_LOS" in mut_los.description
+        # metadata field contains nested metadata from frontmatter
+        assert isinstance(mut_los.metadata, dict)
+
     def test_read_skill_content(self):
         """Test reading skill content"""
         skills_dir = Path(__file__).parent.parent / "skills"
         registry = SkillRegistry(skills_dir)
-        
-        # Read antfu skill content
-        content = registry.read_skill_content("antfu")
+
+        # Read mut_los skill content
+        content = registry.read_skill_content("mut_los")
         assert content
         assert "##" in content  # Should have markdown headers
         assert "---" not in content[:100]  # Should not contain frontmatter

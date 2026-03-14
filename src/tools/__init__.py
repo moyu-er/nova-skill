@@ -133,13 +133,64 @@ def reload_tools():
     return get_all_tools()
 
 
+def register_gateway_tools() -> dict:
+    """Register all gateway tools from tool modules
+    
+    Scans all tool modules for register_module_tools functions and calls them.
+    This allows flexible registration of tools from any module.
+    
+    Returns:
+        Dict mapping module names to count of registered tools
+    """
+    from .gateway import get_global_gateway
+    
+    gateway = get_global_gateway()
+    registered = {}
+    total = 0
+    
+    # List of modules that may have gateway tools
+    # Each module should have a register_module_tools() function
+    gateway_tool_modules = [
+        'mut_los_tools',
+        # Add new gateway tool modules here
+    ]
+    
+    for module_name in gateway_tool_modules:
+        try:
+            module = importlib.import_module(f'.{module_name}', package=__package__)
+            if hasattr(module, 'register_module_tools'):
+                count = module.register_module_tools()
+                registered[module_name] = count
+                total += count
+        except Exception as e:
+            print(f"Warning: Failed to register tools from {module_name}: {e}", file=sys.stderr)
+    
+    # Print summary
+    if registered:
+        categories = set()
+        for tool_name, metadata in gateway._tools.items():
+            categories.add(metadata.category)
+        
+        print(f"✓ Registered {total} gateway tools ({len(categories)} categories)")
+        for module, count in registered.items():
+            if count > 0:
+                print(f"  - {module}: {count} tools")
+    
+    return registered
+
+
 # Import and re-export all tools for backward compatibility
 from .system import get_system_info, execute_command
-from .files import read_file, write_file, list_directory, get_file_info
+from .files import read_file, write_file, list_directory, get_file_info, edit_file, replace_in_file
 from .network import search_web, fetch_url
 from .time import get_current_time, list_timezones
 from .skills import get_available_skills, read_skill_detail
 from .tasks import create_task_plan, get_task_status, update_task_status
+from .gateway import gateway_call_tool, gateway_query_tool, gateway_tool, ToolGateway, get_global_gateway
+from . import mut_los_tools
+
+# Auto-register gateway tools when module is imported
+register_gateway_tools()
 
 __all__ = [
     # Functions
@@ -149,13 +200,16 @@ __all__ = [
     'get_global_registry',
     'get_global_task_manager',
     'reload_tools',
-    # Tools
+    'register_gateway_tools',
+    # Basic Tools
     'get_system_info',
     'execute_command',
     'read_file',
     'write_file',
     'list_directory',
     'get_file_info',
+    'edit_file',
+    'replace_in_file',
     'search_web',
     'fetch_url',
     'get_current_time',
@@ -165,6 +219,12 @@ __all__ = [
     'create_task_plan',
     'get_task_status',
     'update_task_status',
+    # Gateway Tools
+    'gateway_call_tool',
+    'gateway_query_tool',
+    'gateway_tool',
+    'ToolGateway',
+    'get_global_gateway',
 ]
 
 # Auto-discover on import

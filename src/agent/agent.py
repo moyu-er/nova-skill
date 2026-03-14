@@ -26,6 +26,7 @@ from ..core import (
     ToolResultEvent,
     ErrorEvent,
     ReactEvent,
+    ToolCallAccumulator,
 )
 from ..tasks import TaskManager, TaskPlan, TaskStatus, TaskPlanner
 from ..display import SimpleProgressDisplay, DisplayConfig
@@ -455,7 +456,8 @@ class Agent:
 
         config = {"configurable": {"thread_id": thread_id or "default"}}
 
-        seen_tool_calls = set()
+        # Accumulate tool calls across chunks for proper streaming display
+        tc_accumulator = ToolCallAccumulator()
         token_count = 0
         max_tokens = self.config.max_output_tokens
 
@@ -471,18 +473,22 @@ class Agent:
             chunk = event[0]
 
             # Tool call detected (in AIMessageChunk with tool_calls)
+            # Accumulate args across chunks
             if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
                 for tc in chunk.tool_calls:
-                    tc_id = tc.get('id', '')
-                    if tc_id and tc_id not in seen_tool_calls:
-                        seen_tool_calls.add(tc_id)
-                        yield ToolCallEvent(
-                            name=tc.get('name', ''),
-                            args=tc.get('args', {})
-                        )
+                    tc_accumulator.add_tool_call(tc)
 
-            # Tool result
+            # Tool result - emit the accumulated tool call before the result
             elif isinstance(chunk, ToolMessage):
+                tc_id = chunk.tool_call_id
+
+                # Emit the accumulated tool call and remove from cache
+                # ToolMessage indicates the tool call args are fully accumulated
+                if tc_id in tc_accumulator:
+                    tc_event = tc_accumulator.pop_tool_call(tc_id)
+                    if tc_event:
+                        yield tc_event
+
                 yield ToolResultEvent(
                     name=chunk.name,
                     content=chunk.content[:500] if len(chunk.content) > 500 else chunk.content
