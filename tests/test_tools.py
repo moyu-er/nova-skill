@@ -36,8 +36,10 @@ class TestTools:
         assert "create_task_plan" in tool_names
         assert "get_task_status" in tool_names
         assert "update_task_status" in tool_names
+        assert "list_task_plans" in tool_names
+        assert "get_next_task" in tool_names
 
-        assert len(tools) == 15  # 9 base + 2 skill + 3 task planning + 1 file_info
+        assert len(tools) == 17  # 9 base + 2 skill + 5 task planning + 1 file_info
 
     def test_get_all_tools_with_registry(self):
         """Test getting all tools (with explicit registry)"""
@@ -66,9 +68,11 @@ class TestTools:
         assert "create_task_plan" in tool_names
         assert "get_task_status" in tool_names
         assert "update_task_status" in tool_names
+        assert "list_task_plans" in tool_names
+        assert "get_next_task" in tool_names
 
-        assert len(tools) == 15  # 9 base + 2 skill + 3 task planning + 1 file_info
-    
+        assert len(tools) == 17  # 9 base + 2 skill + 5 task planning + 1 file_info
+
     def test_read_skill_detail_tool(self):
         """Test read_skill_detail tool"""
         skills_dir = Path(__file__).parent.parent / "skills"
