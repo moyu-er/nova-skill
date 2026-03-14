@@ -39,7 +39,7 @@ class TestTools:
         assert "list_task_plans" in tool_names
         assert "get_next_task" in tool_names
 
-        assert len(tools) == 17  # 9 base + 2 skill + 5 task planning + 1 file_info
+        assert len(tools) == 19  # 9 base + 2 skill + 5 task planning + 3 file (file_info, edit_file, replace_in_file)
 
     def test_get_all_tools_with_registry(self):
         """Test getting all tools (with explicit registry)"""
@@ -71,7 +71,7 @@ class TestTools:
         assert "list_task_plans" in tool_names
         assert "get_next_task" in tool_names
 
-        assert len(tools) == 17  # 9 base + 2 skill + 5 task planning + 1 file_info
+        assert len(tools) == 19  # 9 base + 2 skill + 5 task planning + 3 file (file_info, edit_file, replace_in_file)
 
     def test_read_skill_detail_tool(self):
         """Test read_skill_detail tool"""
@@ -283,6 +283,199 @@ class TestNetworkTools:
         # Note: This test may fail if no network access
         # Just check it doesn't crash
         assert isinstance(result, str)
+
+
+class TestEditFileTool:
+    """Test edit_file tool"""
+    
+    def _get_edit_file_tool(self):
+        """Helper to get edit_file tool"""
+        tools = get_all_tools()
+        return [t for t in tools if t.name == 'edit_file'][0]
+    
+    def test_edit_file_replace_lines(self):
+        """Test replacing specific lines"""
+        edit_file = self._get_edit_file_tool()
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("line1\nline2\nline3\nline4\nline5")
+            temp_path = f.name
+        
+        try:
+            result = edit_file.invoke({
+                'path': temp_path,
+                'start_line': 2,
+                'end_line': 3,
+                'new_content': 'new_line2\nnew_line3'
+            })
+            assert "Successfully replaced lines 2-3" in result or "Successfully replaced lines 2-3 with" in result
+            
+            # Verify content (PowerShell adds trailing newline on Windows)
+            with open(temp_path, 'r') as f:
+                content = f.read()
+            expected = "line1\nnew_line2\nnew_line3\nline4\nline5"
+            assert content.startswith(expected), f"Content mismatch: {content!r}"
+            assert "line1" in content and "new_line2" in content and "line4" in content
+        finally:
+            os.unlink(temp_path)
+    
+    def test_edit_file_insert_line(self):
+        """Test inserting a line"""
+        edit_file = self._get_edit_file_tool()
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("line1\nline2")
+            temp_path = f.name
+        
+        try:
+            result = edit_file.invoke({
+                'path': temp_path,
+                'start_line': 2,
+                'end_line': 2,
+                'new_content': 'inserted_line'
+            })
+            assert "inserted" in result.lower() or "replaced" in result.lower()
+            
+            with open(temp_path, 'r') as f:
+                content = f.read()
+            # Check content is correct (order matters)
+            assert "line1" in content
+            assert "inserted_line" in content
+            assert "line2" in content
+            # Verify order: line1 comes before inserted_line, which comes before line2
+            line1_pos = content.find("line1")
+            inserted_pos = content.find("inserted_line")
+            line2_pos = content.find("line2")
+            assert line1_pos < inserted_pos < line2_pos, f"Order incorrect: {content!r}"
+        finally:
+            os.unlink(temp_path)
+    
+    def test_edit_file_delete_lines(self):
+        """Test deleting lines"""
+        edit_file = self._get_edit_file_tool()
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("line1\nline2\nline3\nline4")
+            temp_path = f.name
+        
+        try:
+            result = edit_file.invoke({
+                'path': temp_path,
+                'start_line': 2,
+                'end_line': 3,
+                'new_content': ''
+            })
+            assert "deleted" in result.lower()
+            
+            with open(temp_path, 'r') as f:
+                content = f.read()
+            # Verify lines 2 and 3 were deleted
+            assert "line1" in content
+            assert "line4" in content
+            assert "line2" not in content
+            assert "line3" not in content
+            # Verify order
+            assert content.find("line1") < content.find("line4")
+        finally:
+            os.unlink(temp_path)
+
+
+class TestReplaceInFileTool:
+    """Test replace_in_file tool"""
+    
+    def _get_replace_in_file_tool(self):
+        """Helper to get replace_in_file tool"""
+        tools = get_all_tools()
+        return [t for t in tools if t.name == 'replace_in_file'][0]
+    
+    def test_replace_in_file_single(self):
+        """Test single replacement"""
+        replace_in_file = self._get_replace_in_file_tool()
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("hello world foo bar")
+            temp_path = f.name
+        
+        try:
+            result = replace_in_file.invoke({
+                'path': temp_path,
+                'old_string': 'world',
+                'new_string': 'universe'
+            })
+            assert "replaced 1 occurrence" in result
+            
+            with open(temp_path, 'r') as f:
+                content = f.read()
+            assert "hello universe foo bar" == content
+        finally:
+            os.unlink(temp_path)
+    
+    def test_replace_in_file_multiple(self):
+        """Test multiple replacements"""
+        replace_in_file = self._get_replace_in_file_tool()
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("foo bar foo baz foo")
+            temp_path = f.name
+        
+        try:
+            result = replace_in_file.invoke({
+                'path': temp_path,
+                'old_string': 'foo',
+                'new_string': 'hello'
+            })
+            assert "replaced 3 occurrences" in result
+            
+            with open(temp_path, 'r') as f:
+                content = f.read()
+            assert "hello bar hello baz hello" == content
+        finally:
+            os.unlink(temp_path)
+    
+    def test_replace_in_file_limited_count(self):
+        """Test limited count replacement"""
+        replace_in_file = self._get_replace_in_file_tool()
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("foo bar foo baz foo")
+            temp_path = f.name
+        
+        try:
+            result = replace_in_file.invoke({
+                'path': temp_path,
+                'old_string': 'foo',
+                'new_string': 'hello',
+                'count': 2
+            })
+            assert "replaced 2 occurrences" in result
+            
+            with open(temp_path, 'r') as f:
+                content = f.read()
+            assert "hello bar hello baz foo" == content
+        finally:
+            os.unlink(temp_path)
+    
+    def test_replace_in_file_multiline(self):
+        """Test multi-line replacement"""
+        replace_in_file = self._get_replace_in_file_tool()
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("line1\nline2\nline3\nline4")
+            temp_path = f.name
+        
+        try:
+            result = replace_in_file.invoke({
+                'path': temp_path,
+                'old_string': 'line2\nline3',
+                'new_string': 'new2\nnew3'
+            })
+            assert "replaced 1 occurrence" in result
+            
+            with open(temp_path, 'r') as f:
+                content = f.read()
+            assert "line1\nnew2\nnew3\nline4" == content
+        finally:
+            os.unlink(temp_path)
 
 
 if __name__ == "__main__":

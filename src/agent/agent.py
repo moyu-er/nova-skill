@@ -44,6 +44,9 @@ class AgentConfig:
     # OPENAI: force use OpenAI format (default when no config or config error)
     # ANTHROPIC: force use Anthropic format
     model_type: ModelType = ModelType.AUTO
+    # ReAct mode limits
+    max_react_turns: int = 30  # Maximum number of agent-tool interaction turns
+    max_output_tokens: int = 8192   # Maximum tokens per response
 
     def __post_init__(self):
         if self.skills is None:
@@ -197,6 +200,20 @@ class Agent:
         parts.append(f"Path Separator: {'\\\\' if platform.system() == 'Windows' else '/'}")
         parts.append("Use appropriate path formats for the current OS.")
 
+        # Task planning guidance - encourage model to plan for complex tasks
+        parts.append("\n---")
+        parts.append("TASK PLANNING GUIDANCE:")
+        parts.append("For complex multi-step tasks, you SHOULD create a task plan first.")
+        parts.append("Call 'create_task_plan' to break down the request into manageable steps.")
+        parts.append("This helps track progress and ensures nothing is missed.")
+        parts.append("Examples of when to plan:")
+        parts.append("- Projects requiring multiple file operations")
+        parts.append("- Tasks with dependencies between steps")
+        parts.append("- Complex refactoring or implementation work")
+        parts.append("- Multi-stage analysis or data processing")
+        parts.append("After creating a plan, you can track progress with 'get_task_status' and 'update_task_status'.")
+        parts.append("---")
+
         # Tell model what skills are available (only names and descriptions, not full content)
         if self._skills_loaded:
             parts.append("\nYou can use the following skills (load details on demand):")
@@ -215,6 +232,7 @@ class Agent:
 
         class State(TypedDict):
             messages: Annotated[list, add_messages]
+            turn_count: int  # Track agent-tool interaction turns
 
         workflow = StateGraph(State)
 
@@ -233,7 +251,14 @@ class Agent:
             from langchain_core.messages import SystemMessage
 
             messages = [SystemMessage(content=self._system_prompt)] + state["messages"]
-            response = self.llm.bind_tools(all_tool_schemas).invoke(messages)
+
+            # Check turn limit - if exceeded, don't bind tools to force final response
+            current_turn = state.get("turn_count", 0)
+            if current_turn >= self.config.max_react_turns:
+                logger.warning(f"ReAct turn limit reached: {current_turn}, forcing final response")
+                response = self.llm.invoke(messages)
+            else:
+                response = self.llm.bind_tools(all_tool_schemas).invoke(messages)
             return {"messages": [response]}
 
         def should_continue(state: State):
@@ -249,7 +274,7 @@ class Agent:
 
             last_message = state["messages"][-1]
             if not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
-                return {"messages": []}
+                return {"messages": [], "turn_count": state.get("turn_count", 0)}
 
             results = []
             for tool_call in last_message.tool_calls:
@@ -270,7 +295,8 @@ class Agent:
 
                 results.append(ToolMessage(content=str(result), name=tool_name, tool_call_id=tool_id))
 
-            return {"messages": results}
+            # Increment turn count after tool execution
+            return {"messages": results, "turn_count": state.get("turn_count", 0) + 1}
 
         workflow.add_node("agent", agent_node)
         workflow.add_node("tools", tools_node)
@@ -430,9 +456,11 @@ class Agent:
         config = {"configurable": {"thread_id": thread_id or "default"}}
 
         seen_tool_calls = set()
+        token_count = 0
+        max_tokens = self.config.max_output_tokens
 
         async for event in self._graph.astream(
-            {"messages": [HumanMessage(content=message)]},
+            {"messages": [HumanMessage(content=message)], "turn_count": 0},
             config,
             stream_mode="messages"
         ):
@@ -462,7 +490,18 @@ class Agent:
 
             # AI response chunk (streaming)
             elif isinstance(chunk, AIMessageChunk) and chunk.content:
-                yield ContentEvent(content=chunk.content)
+                content = chunk.content
+                # Check token limit (approximate: 1 token ~= 4 chars for English, 1 char for CJK)
+                estimated_tokens = len(content) // 2  # Conservative estimate
+                if token_count + estimated_tokens > max_tokens:
+                    remaining = max_tokens - token_count
+                    if remaining > 0:
+                        content = content[:remaining * 2]
+                        yield ContentEvent(content=content)
+                    yield ErrorEvent(content=f"\n[Output truncated: reached max token limit ({max_tokens})]")
+                    break
+                token_count += estimated_tokens
+                yield ContentEvent(content=content)
 
     async def create_task_plan(self, query: str) -> TaskPlan:
         """创建任务计划"""
